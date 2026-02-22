@@ -216,7 +216,6 @@ def sync_parse_dtek(addr_key, addr):
         time.sleep(2.5)
         nuke()
 
-        # 🔥 ОНОВЛЕНИЙ РОЗУМНИЙ ФІНГЕРПРИНТ (Реагує тільки на кольори) 🔥
         try:
             schedule_fingerprint = driver.execute_script("""
                 var cells = document.querySelectorAll('.table2col td');
@@ -262,19 +261,20 @@ def sync_parse_dtek(addr_key, addr):
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
             path1 = os.path.join(BASE_DIR, f"photo_{addr_key}_today.png")
             target.screenshot(path1)
-            try: d_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
-            except: d_txt = "Сьогодні"
-            parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}\n📅 {d_txt}"}
+            parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}"}
         except: pass
 
-        # 🔥 ФОТО 2: БРОНЕБІЙНИЙ ПОШУК "ЗАВТРА" 🔥
+        # 🔥 ФОТО 2: ПОШУК КНОПКИ "ЗАВТРА" ПО ТЕКСТУ 🔥
         try:
             clicked = driver.execute_script("""
-                var ds = document.querySelectorAll('.date');
-                if (ds.length > 1) {
-                    var lastBtn = ds[ds.length - 1]; 
-                    if (!lastBtn.classList.contains('active')) {
-                        lastBtn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                // Шукаємо ВСІ елементи на сторінці
+                var els = document.querySelectorAll('div, button, label, span');
+                for (var i = 0; i < els.length; i++) {
+                    var txt = els[i].innerText || "";
+                    // Якщо в елементі є текст "на завтра" - це наш клієнт
+                    if (txt.toLowerCase().includes("на завтра")) {
+                        els[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        try { els[i].click(); } catch(e) {}
                         return true;
                     }
                 }
@@ -282,24 +282,18 @@ def sync_parse_dtek(addr_key, addr):
             """)
             
             if clicked:
-                # Чекаємо 3 секунди, щоб сайт 100% почав вантажити таблицю
-                time.sleep(3) 
+                time.sleep(3.5) # Чекаємо, поки ДТЕК підвантажить таблицю
                 nuke()
                 
-                # Чекаємо до 15 секунд, поки таблиця реально з'явиться на сторінці
                 target2 = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "table2col")))
-                
                 if target2.is_displayed():
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target2)
-                    time.sleep(0.5) # Чекаємо, поки плавно доскролить
+                    time.sleep(0.5) 
                     
                     path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
                     target2.screenshot(path2)
                     
-                    try: d2_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
-                    except: d2_txt = "Завтра"
-                    
-                    parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
+                    parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}"}
         except Exception as e:
             print(f"⚠️ ПОМИЛКА ПАРСИНГУ 'ЗАВТРА' ({addr_key}): {e}")
 
