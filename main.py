@@ -26,7 +26,7 @@ from google.oauth2.service_account import Credentials
 # --- ⚙️ НАСТРОЙКИ ---
 TOKEN = "8177741538:AAEqlEsJomzv8Sx7e-5jcM11gp05F5bHvtQ"
 DTEK_URL = "https://www.dtek-dnem.com.ua/ua/shutdowns"
-CHECK_INTERVAL = 300  # 300 секунд = 5 минут
+CHECK_INTERVAL = 300  # 300 секунд = 5 хвилин
 
 # 🛠 РЕЖИМ РАБОТЫ
 IS_LOCAL_TESTING = False  # ОБЯЗАТЕЛЬНО FALSE ДЛЯ СЕРВЕРА
@@ -87,7 +87,7 @@ def log_to_sheets(user_name, username, action):
         sheet_id = os.environ.get("SPREADSHEET_ID")
         
         if not creds_json or not sheet_id:
-            return # Если ключей нет, просто выходим
+            return 
 
         creds_dict = json.loads(creds_json)
         scopes = [
@@ -99,7 +99,6 @@ def log_to_sheets(user_name, username, action):
         client = gspread.authorize(creds)
         sheet = client.open_by_key(sheet_id).sheet1
         
-        # Время записи (по Киеву)
         now = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%d.%m.%Y %H:%M:%S")
         uname = f"@{username}" if username else "Скрыт" 
         
@@ -108,7 +107,6 @@ def log_to_sheets(user_name, username, action):
     except Exception as e:
         print(f"⚠️ Ошибка записи в таблицу: {e}")
 
-# Асинхронная обертка для записи
 async def async_log(user_name, username, action):
     await asyncio.to_thread(log_to_sheets, user_name, username, action)
 
@@ -218,19 +216,25 @@ def sync_parse_dtek(addr_key, addr):
         time.sleep(2.5)
         nuke()
 
+        # 🔥 ОНОВЛЕНИЙ РОЗУМНИЙ ФІНГЕРПРИНТ 🔥
         try:
             schedule_fingerprint = driver.execute_script("""
                 var cells = document.querySelectorAll('.table2col td');
                 var res = [];
-                cells.forEach(c => res.push(c.className));
-                return res.join('|');
+                for(var i=0; i<cells.length; i++) {
+                    var cls = cells[i].className || "";
+                    var state = "🟢"; 
+                    if(cls.includes("scheduled") && !cls.includes("non")) state = "🔴"; 
+                    if(cls.includes("maybe")) state = "🟡"; 
+                    res.push(state);
+                }
+                return res.join('');
             """)
         except: 
             schedule_fingerprint = "error"
 
         def get_status():
             try:
-                # Київський час для правильного статусу на сайті
                 h = (datetime.now(timezone.utc) + timedelta(hours=2)).hour
                 t_str = f"{h:02d}-{h+1:02d}"
                 script = f"""
@@ -377,7 +381,8 @@ async def monitoring_loop():
                     STORAGE[addr_key]["fingerprint"] = new_fingerprint
                     STORAGE[addr_key]["last_check"] = time.time()
                     
-                    if old_fingerprint and new_fingerprint != old_fingerprint:
+                    # 🔥 ОНОВЛЕНА ЛОГІКА: ІГНОРУЄМО ПОМИЛКИ ПРИ ПОРІВНЯННІ 🔥
+                    if old_fingerprint and old_fingerprint != "error" and new_fingerprint != "error" and new_fingerprint != old_fingerprint:
                         subs = STORAGE[addr_key]["subscribers"]
                         if subs:
                             for user_id in subs:
