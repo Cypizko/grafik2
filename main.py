@@ -267,32 +267,41 @@ def sync_parse_dtek(addr_key, addr):
             parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}\n📅 {d_txt}"}
         except: pass
 
-        # 🔥 ОНОВЛЕНИЙ ПОШУК КНОПКИ "ЗАВТРА" (Шукаємо строго наступний день) 🔥
+        # 🔥 ФОТО 2: БРОНЕБІЙНИЙ ПОШУК "ЗАВТРА" 🔥
         try:
             clicked = driver.execute_script("""
                 var ds = document.querySelectorAll('.date');
-                for(var i=0; i<ds.length; i++) {
-                    if(ds[i].classList.contains('active')) {
-                        if(i + 1 < ds.length) {
-                            ds[i+1].click(); 
-                            return true;
-                        }
+                if (ds.length > 1) {
+                    var lastBtn = ds[ds.length - 1]; 
+                    if (!lastBtn.classList.contains('active')) {
+                        lastBtn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        return true;
                     }
                 }
                 return false;
             """)
+            
             if clicked:
-                time.sleep(1.5)
+                # Чекаємо 3 секунди, щоб сайт 100% почав вантажити таблицю
+                time.sleep(3) 
                 nuke()
-                target2 = driver.find_element(By.CLASS_NAME, "table2col")
+                
+                # Чекаємо до 15 секунд, поки таблиця реально з'явиться на сторінці
+                target2 = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "table2col")))
+                
                 if target2.is_displayed():
-                    path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target2)
+                    time.sleep(0.5) # Чекаємо, поки плавно доскролить
+                    
+                    path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
                     target2.screenshot(path2)
+                    
                     try: d2_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
                     except: d2_txt = "Завтра"
+                    
                     parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
-        except: pass
+        except Exception as e:
+            print(f"⚠️ ПОМИЛКА ПАРСИНГУ 'ЗАВТРА' ({addr_key}): {e}")
 
         return parsed_data, schedule_fingerprint
 
