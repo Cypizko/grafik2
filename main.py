@@ -25,7 +25,7 @@ DTEK_URL = "https://www.dtek-dnem.com.ua/ua/shutdowns"
 CHECK_INTERVAL = 300  # 300 секунд = 5 минут
 
 # 🛠 РЕЖИМ РАБОТЫ
-IS_LOCAL_TESTING = False 
+IS_LOCAL_TESTING = False  # ОБЯЗАТЕЛЬНО FALSE ДЛЯ СЕРВЕРА
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # База адресов
@@ -53,6 +53,12 @@ ADDRS = {
         "city": "м. Дніпро", 
         "street": "вул. Мазепи Галини", 
         "house": "76"
+    },
+    "dnipro_4": {
+        "header": "м. Дніпро, вул. Володимира Вернадського, 19/21",
+        "city": "м. Дніпро", 
+        "street": "вул. Володимира Вернадського", 
+        "house": "19/21"
     }
 }
 
@@ -72,7 +78,7 @@ dp = Dispatcher()
 
 # --- 🚀 УПРАВЛЕНИЕ БРАУЗЕРОМ ---
 def close_browser():
-    """Жестко закрывает браузер и освобождает память"""
+    """Жестко закрывает браузер (Синхронная функция)"""
     global DRIVER
     if DRIVER is not None:
         print("💤 Закрываю браузер (освобождаю память)...")
@@ -80,10 +86,15 @@ def close_browser():
         except: pass
         DRIVER = None
 
+async def safe_close_browser():
+    """Безопасное закрытие браузера из асинхронного потока"""
+    global BROWSER_LOCK
+    async with BROWSER_LOCK:
+        close_browser()
+
 def get_browser():
     """Возвращает текущий браузер или открывает новый"""
     global DRIVER
-    
     if DRIVER is not None:
         try:
             _ = DRIVER.title
@@ -114,143 +125,147 @@ def get_browser():
         print(f"❌ Ошибка запуска Chrome: {e}")
         return None
 
-# --- 🕵️ SELENIUM ПАРСЕР ---
-async def parse_dtek(addr_key, addr):
-    global BROWSER_LOCK, DRIVER
+# --- 🕵️ СИНХРОННЫЙ ПАРСЕР (В ФОНОВОМ ПОТОКЕ) ---
+def sync_parse_dtek(addr_key, addr):
+    global DRIVER
+    print(f"🕵️ MONITOR: Проверяю {addr['street']} {addr['house']}...")
+    driver = get_browser()
+    if not driver: return None, None
     
-    async with BROWSER_LOCK:
-        print(f"🕵️ MONITOR: Проверяю {addr['street']} {addr['house']}...")
-        driver = get_browser()
-        if not driver: return None, None
-        
-        wait = WebDriverWait(driver, 15)
-        parsed_data = {"today": None, "tomorrow": None}
-        schedule_fingerprint = "" 
+    wait = WebDriverWait(driver, 15)
+    parsed_data = {"today": None, "tomorrow": None}
+    schedule_fingerprint = "" 
+    
+    try:
+        driver.get(DTEK_URL)
+        time.sleep(1.5) 
+
+        def nuke():
+            try:
+                driver.execute_script("""
+                    document.body.style.overflow = 'visible';
+                    var bad = document.querySelectorAll('.modal, .modal-backdrop, .popup, .banner, iframe, .header, .cookie');
+                    bad.forEach(el => el.remove());
+                    var all = document.querySelectorAll('*');
+                    for (var i=0; i<all.length; i++) {
+                        var style = window.getComputedStyle(all[i]);
+                        if (style.position == 'fixed' || style.zIndex > 100) {
+                             if (all[i].className.indexOf('header') == -1) all[i].remove();
+                        }
+                    }
+                """)
+            except: pass
+        nuke()
+
+        def safe_fill(field, val):
+            nuke()
+            try:
+                el = wait.until(EC.presence_of_element_located((By.NAME, field)))
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                driver.execute_script(f"arguments[0].value = '{val}';", el)
+                driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", el)
+                time.sleep(0.8)
+                driver.execute_script(f"""
+                    var list = document.getElementById('{field}autocomplete-list');
+                    if(list) {{ var items = list.getElementsByTagName('div'); if(items.length>0) items[0].click(); }}
+                """)
+                time.sleep(0.5)
+            except Exception as e: pass
+
+        safe_fill("city", addr['city'])
+        safe_fill("street", addr['street'])
         
         try:
-            driver.get(DTEK_URL)
-            time.sleep(1.5) 
+            el_house = wait.until(EC.presence_of_element_located((By.NAME, "house_num")))
+            driver.execute_script(f"arguments[0].value = '{addr['house']}';", el_house)
+            driver.execute_script("arguments[0].dispatchEvent(new Event('input'));", el_house)
+            time.sleep(0.5)
+            el_house.send_keys(Keys.ENTER)
+        except: pass
 
-            def nuke():
-                try:
-                    driver.execute_script("""
-                        document.body.style.overflow = 'visible';
-                        var bad = document.querySelectorAll('.modal, .modal-backdrop, .popup, .banner, iframe, .header, .cookie');
-                        bad.forEach(el => el.remove());
-                        var all = document.querySelectorAll('*');
-                        for (var i=0; i<all.length; i++) {
-                            var style = window.getComputedStyle(all[i]);
-                            if (style.position == 'fixed' || style.zIndex > 100) {
-                                 if (all[i].className.indexOf('header') == -1) all[i].remove();
-                            }
-                        }
-                    """)
-                except: pass
-            nuke()
+        time.sleep(2.5)
+        nuke()
 
-            def safe_fill(field, val):
-                nuke()
-                try:
-                    el = wait.until(EC.presence_of_element_located((By.NAME, field)))
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-                    driver.execute_script(f"arguments[0].value = '{val}';", el)
-                    driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", el)
-                    time.sleep(0.8)
-                    driver.execute_script(f"""
-                        var list = document.getElementById('{field}autocomplete-list');
-                        if(list) {{ var items = list.getElementsByTagName('div'); if(items.length>0) items[0].click(); }}
-                    """)
-                    time.sleep(0.5)
-                except Exception as e: pass
+        try:
+            schedule_fingerprint = driver.execute_script("""
+                var cells = document.querySelectorAll('.table2col td');
+                var res = [];
+                cells.forEach(c => res.push(c.className));
+                return res.join('|');
+            """)
+        except: 
+            schedule_fingerprint = "error"
 
-            safe_fill("city", addr['city'])
-            safe_fill("street", addr['street'])
-            
+        def get_status():
             try:
-                el_house = wait.until(EC.presence_of_element_located((By.NAME, "house_num")))
-                driver.execute_script(f"arguments[0].value = '{addr['house']}';", el_house)
-                driver.execute_script("arguments[0].dispatchEvent(new Event('input'));", el_house)
-                time.sleep(0.5)
-                el_house.send_keys(Keys.ENTER)
-            except: pass
-
-            time.sleep(2.5)
-            nuke()
-
-            try:
-                schedule_fingerprint = driver.execute_script("""
-                    var cells = document.querySelectorAll('.table2col td');
-                    var res = [];
-                    cells.forEach(c => res.push(c.className));
-                    return res.join('|');
-                """)
-            except: 
-                schedule_fingerprint = "error"
-
-            def get_status():
-                try:
-                    h = (datetime.now().hour + 2) % 24
-                    t_str = f"{h:02d}-{h+1:02d}"
-                    script = f"""
-                    var tds = document.querySelectorAll('td');
-                    for(var i=0; i<tds.length; i++) {{
-                        if(tds[i].innerText.includes('{t_str}')) {{
-                            var n = tds[i].nextElementSibling;
-                            if(n) return n.className || 'clean';
-                        }}
+                h = (datetime.now().hour + 2) % 24
+                t_str = f"{h:02d}-{h+1:02d}"
+                script = f"""
+                var tds = document.querySelectorAll('td');
+                for(var i=0; i<tds.length; i++) {{
+                    if(tds[i].innerText.includes('{t_str}')) {{
+                        var n = tds[i].nextElementSibling;
+                        if(n) return n.className || 'clean';
                     }}
-                    return 'not_found';"""
-                    cls = driver.execute_script(script)
-                    if cls == 'not_found': return f"❓ Час не знайдено ({t_str})"
-                    if "scheduled" in cls and "non" not in cls: return "🔴 СВІТЛА НЕМАЄ"
-                    if "maybe" in cls: return "🟡 МОЖЛИВЕ ВІДКЛЮЧЕННЯ"
-                    return "🟢 СВІТЛО Є"
-                except: return "❓ Статус невідомий"
+                }}
+                return 'not_found';"""
+                cls = driver.execute_script(script)
+                if cls == 'not_found': return f"❓ Час не знайдено ({t_str})"
+                if "scheduled" in cls and "non" not in cls: return "🔴 СВІТЛА НЕМАЄ"
+                if "maybe" in cls: return "🟡 МОЖЛИВЕ ВІДКЛЮЧЕННЯ"
+                return "🟢 СВІТЛО Є"
+            except: return "❓ Статус невідомий"
 
-            status_now = get_status()
-            base_caption = f"{status_now}\n🏠 {addr['header']}"
+        status_now = get_status()
+        base_caption = f"{status_now}\n🏠 {addr['header']}"
 
-            # ФОТО 1
-            try:
-                target = driver.find_element(By.CLASS_NAME, "table2col")
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
-                path1 = os.path.join(BASE_DIR, f"photo_{addr_key}_today.png")
-                target.screenshot(path1)
-                try: d_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
-                except: d_txt = "Сьогодні"
-                
-                parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}\n📅 {d_txt}"}
-            except: pass
+        # ФОТО 1
+        try:
+            target = driver.find_element(By.CLASS_NAME, "table2col")
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
+            path1 = os.path.join(BASE_DIR, f"photo_{addr_key}_today.png")
+            target.screenshot(path1)
+            try: d_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
+            except: d_txt = "Сьогодні"
+            
+            parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}\n📅 {d_txt}"}
+        except: pass
 
-            # ФОТО 2
-            try:
-                clicked = driver.execute_script("""
-                    var ds = document.querySelectorAll('.date');
-                    for(var i=0; i<ds.length; i++) {
-                        if(!ds[i].classList.contains('active')) { ds[i].click(); return true; }
-                    }
-                    return false;
-                """)
-                if clicked:
-                    time.sleep(1.5)
-                    nuke()
-                    target2 = driver.find_element(By.CLASS_NAME, "table2col")
-                    if target2.is_displayed():
-                        path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
-                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target2)
-                        target2.screenshot(path2)
-                        try: d2_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
-                        except: d2_txt = "Завтра"
-                        
-                        parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
-            except: pass
+        # ФОТО 2
+        try:
+            clicked = driver.execute_script("""
+                var ds = document.querySelectorAll('.date');
+                for(var i=0; i<ds.length; i++) {
+                    if(!ds[i].classList.contains('active')) { ds[i].click(); return true; }
+                }
+                return false;
+            """)
+            if clicked:
+                time.sleep(1.5)
+                nuke()
+                target2 = driver.find_element(By.CLASS_NAME, "table2col")
+                if target2.is_displayed():
+                    path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target2)
+                    target2.screenshot(path2)
+                    try: d2_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
+                    except: d2_txt = "Завтра"
+                    
+                    parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
+        except: pass
 
-            return parsed_data, schedule_fingerprint
+        return parsed_data, schedule_fingerprint
 
-        except Exception as e:
-            print(f"❌ Ошибка парсинга: {e}")
-            close_browser() 
-            return None, None
+    except Exception as e:
+        print(f"❌ Ошибка парсинга: {e}")
+        close_browser() 
+        return None, None
+
+# --- 🚀 АСИНХРОННАЯ ОБЕРТКА ---
+async def parse_dtek(addr_key, addr):
+    global BROWSER_LOCK
+    async with BROWSER_LOCK:
+        return await asyncio.to_thread(sync_parse_dtek, addr_key, addr)
 
 # --- ОТПРАВКА ---
 async def send_schedule(user_id, addr_key, is_instant=False):
@@ -278,14 +293,12 @@ async def send_schedule(user_id, addr_key, is_instant=False):
 
     await bot.send_photo(chat_id=user_id, photo=FSInputFile(today["photo"]), caption=caption, reply_markup=reply_markup)
 
-
 # --- 🔥 ЛОГИКА УМНОЙ ПОДПИСКИ 🔥 ---
 def switch_subscription(user_id, new_addr_key):
     for key in STORAGE:
         if user_id in STORAGE[key]["subscribers"]:
             STORAGE[key]["subscribers"].remove(user_id)
     STORAGE[new_addr_key]["subscribers"].add(user_id)
-
 
 # --- ЛОГИКА ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕМ ---
 async def perform_check(user_id, addr_key):
@@ -300,11 +313,9 @@ async def perform_check(user_id, addr_key):
     elif parsed["tomorrow"] and not os.path.exists(parsed["tomorrow"]["photo"]): need_refresh = True
     
     if need_refresh:
-        # Отправляем сообщение только если реально нужно качать данные
         status_message = await bot.send_message(user_id, "🐢 Оновлюю дані для цієї адреси...")
-
         new_parsed, new_fp = await parse_dtek(addr_key, ADDRS[addr_key])
-        close_browser()
+        await safe_close_browser()
         
         if new_parsed and new_parsed["today"]:
             STORAGE[addr_key]["parsed"] = new_parsed
@@ -315,9 +326,7 @@ async def perform_check(user_id, addr_key):
         else:
             await status_message.edit_text("❌ Не вдалося отримати графік.")
     else:
-        # Если данные в кэше — мгновенно отдаем без сообщений "Загружаю..."
         await send_schedule(user_id, addr_key, is_instant=True)
-
 
 # --- 🔄 ЦИКЛ МОНИТОРИНГА ---
 async def monitoring_loop():
@@ -346,13 +355,13 @@ async def monitoring_loop():
                                     await send_schedule(user_id, addr_key)
                                 except: pass
                                 
-            close_browser()
+            await safe_close_browser()
             print(f"⏳ Проверка завершена. Сплю {CHECK_INTERVAL // 60} минут...")
             await asyncio.sleep(CHECK_INTERVAL)
             
         except Exception as e:
             print(f"⚠️ Ошибка в цикле мониторинга: {e}")
-            close_browser()
+            await safe_close_browser()
             await asyncio.sleep(60)
 
 # --- 🤖 КЛАВИАТУРЫ ---
@@ -368,6 +377,7 @@ def get_dnipro_kb():
     builder.row(KeyboardButton(text="📍 Севастопольська, 16"))
     builder.row(KeyboardButton(text="📍 просп. Мануйлівський, 78"))
     builder.row(KeyboardButton(text="📍 вул. Мазепи Галини, 76"))
+    builder.row(KeyboardButton(text="📍 вул. Володимира Вернадського, 19/21"))
     builder.row(KeyboardButton(text="🔙 Назад"))
     return builder.as_markup(resize_keyboard=True)
 
@@ -382,7 +392,6 @@ async def process_back(message: types.Message):
 
 @dp.message(F.text == "🏠 Новомиколаївка")
 async def process_novo(message: types.Message):
-    # Убрали status_msg
     await perform_check(message.from_user.id, "addr1")
 
 @dp.message(F.text == "🏢 Дніпро")
@@ -391,18 +400,19 @@ async def process_dnipro_menu(message: types.Message):
 
 @dp.message(F.text == "📍 Севастопольська, 16")
 async def process_dnipro_1(message: types.Message):
-    # Убрали status_msg
     await perform_check(message.from_user.id, "dnipro_1")
 
 @dp.message(F.text == "📍 просп. Мануйлівський, 78")
 async def process_dnipro_2(message: types.Message):
-    # Убрали status_msg
     await perform_check(message.from_user.id, "dnipro_2")
 
 @dp.message(F.text == "📍 вул. Мазепи Галини, 76")
 async def process_dnipro_3(message: types.Message):
-    # Убрали status_msg
     await perform_check(message.from_user.id, "dnipro_3")
+
+@dp.message(F.text == "📍 вул. Володимира Вернадського, 19/21")
+async def process_dnipro_4(message: types.Message):
+    await perform_check(message.from_user.id, "dnipro_4")
 
 @dp.callback_query(F.data.startswith("tmr_"))
 async def process_tomorrow(callback: types.CallbackQuery):
