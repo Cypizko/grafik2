@@ -216,7 +216,7 @@ def sync_parse_dtek(addr_key, addr):
         time.sleep(2.5)
         nuke()
 
-        # 🔥 ОНОВЛЕНИЙ РОЗУМНИЙ ФІНГЕРПРИНТ 🔥
+        # 🔥 ОНОВЛЕНИЙ РОЗУМНИЙ ФІНГЕРПРИНТ (Реагує тільки на кольори) 🔥
         try:
             schedule_fingerprint = driver.execute_script("""
                 var cells = document.querySelectorAll('.table2col td');
@@ -256,6 +256,7 @@ def sync_parse_dtek(addr_key, addr):
         status_now = get_status()
         base_caption = f"{status_now}\n🏠 {addr['header']}"
 
+        # ФОТО 1: Сьогодні
         try:
             target = driver.find_element(By.CLASS_NAME, "table2col")
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
@@ -266,11 +267,17 @@ def sync_parse_dtek(addr_key, addr):
             parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}\n📅 {d_txt}"}
         except: pass
 
+        # 🔥 ОНОВЛЕНИЙ ПОШУК КНОПКИ "ЗАВТРА" (Шукаємо строго наступний день) 🔥
         try:
             clicked = driver.execute_script("""
                 var ds = document.querySelectorAll('.date');
                 for(var i=0; i<ds.length; i++) {
-                    if(!ds[i].classList.contains('active')) { ds[i].click(); return true; }
+                    if(ds[i].classList.contains('active')) {
+                        if(i + 1 < ds.length) {
+                            ds[i+1].click(); 
+                            return true;
+                        }
+                    }
                 }
                 return false;
             """)
@@ -381,7 +388,6 @@ async def monitoring_loop():
                     STORAGE[addr_key]["fingerprint"] = new_fingerprint
                     STORAGE[addr_key]["last_check"] = time.time()
                     
-                    # 🔥 ОНОВЛЕНА ЛОГІКА: ІГНОРУЄМО ПОМИЛКИ ПРИ ПОРІВНЯННІ 🔥
                     if old_fingerprint and old_fingerprint != "error" and new_fingerprint != "error" and new_fingerprint != old_fingerprint:
                         subs = STORAGE[addr_key]["subscribers"]
                         if subs:
