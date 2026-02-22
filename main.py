@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, types, F
@@ -280,7 +280,10 @@ async def send_schedule(user_id, addr_key, is_instant=False):
 
     caption = today["caption"]
     if is_instant:
-        update_time = datetime.fromtimestamp(data["last_check"]).strftime("%H:%M")
+        # Беремо час сервера (UTC) і додаємо 2 години для Києва
+        dt_utc = datetime.fromtimestamp(data["last_check"], tz=timezone.utc)
+        dt_kyiv = dt_utc + timedelta(hours=2)
+        update_time = dt_kyiv.strftime("%H:%M")
         caption += f"\n\n⚡ Миттєва відповідь (за {update_time})"
 
     reply_markup = None
@@ -454,3 +457,4 @@ async def main():
 if __name__ == '__main__':
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Бот остановлен")
+
