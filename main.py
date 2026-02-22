@@ -264,15 +264,14 @@ def sync_parse_dtek(addr_key, addr):
             parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}"}
         except: pass
 
-        # 🔥 ФОТО 2: ПОШУК КНОПКИ "ЗАВТРА" ПО ТЕКСТУ 🔥
+        # 🔥 ФОТО 2: ТОЧНИЙ КЛІК ТА ВИДИМА ТАБЛИЦЯ 🔥
         try:
             clicked = driver.execute_script("""
-                // Шукаємо ВСІ елементи на сторінці
-                var els = document.querySelectorAll('div, button, label, span');
+                var els = document.querySelectorAll('div, button, label, span, a');
                 for (var i = 0; i < els.length; i++) {
-                    var txt = els[i].innerText || "";
-                    // Якщо в елементі є текст "на завтра" - це наш клієнт
-                    if (txt.toLowerCase().includes("на завтра")) {
+                    var txt = (els[i].innerText || "").trim();
+                    // Шукаємо елемент, який містить слово "завтра" і є КОРОТКИМ (до 40 символів)
+                    if (txt.toLowerCase().includes("завтра") && txt.length < 40) {
                         els[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
                         try { els[i].click(); } catch(e) {}
                         return true;
@@ -282,18 +281,31 @@ def sync_parse_dtek(addr_key, addr):
             """)
             
             if clicked:
-                time.sleep(3.5) # Чекаємо, поки ДТЕК підвантажить таблицю
+                time.sleep(3.5) # Даємо час на підвантаження таблиці
                 nuke()
                 
-                target2 = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "table2col")))
-                if target2.is_displayed():
+                # Знаходимо всі таблиці і беремо ту, яка зараз ВИДИМА на екрані
+                tables = driver.find_elements(By.CLASS_NAME, "table2col")
+                target2 = None
+                for t in tables:
+                    if t.is_displayed():
+                        target2 = t
+                        break
+                
+                if target2:
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target2)
                     time.sleep(0.5) 
                     
                     path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
                     target2.screenshot(path2)
                     
-                    parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}"}
+                    try: 
+                        # Дістаємо гарну дату прямо з кнопки
+                        d2_txt = driver.execute_script("return Array.from(document.querySelectorAll('*')).find(e => (e.innerText||'').toLowerCase().includes('завтра') && e.innerText.length < 40).innerText.trim();")
+                        if not d2_txt: d2_txt = "Завтра"
+                    except: d2_txt = "Завтра"
+                    
+                    parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
         except Exception as e:
             print(f"⚠️ ПОМИЛКА ПАРСИНГУ 'ЗАВТРА' ({addr_key}): {e}")
 
