@@ -264,46 +264,52 @@ def sync_parse_dtek(addr_key, addr):
             parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}"}
         except: pass
 
-        # 🔥 ФОТО 2: ТОЧНИЙ КЛІК ТА ВИДИМА ТАБЛИЦЯ 🔥
+        # 🔥 ФОТО 2: СНАЙПЕРСЬКИЙ ПОШУК КНОПКИ "ЗАВТРА" 🔥
         try:
-            clicked = driver.execute_script("""
-                var els = document.querySelectorAll('div, button, label, span, a');
-                for (var i = 0; i < els.length; i++) {
-                    var txt = (els[i].innerText || "").trim();
-                    // Шукаємо елемент, який містить слово "завтра" і є КОРОТКИМ (до 40 символів)
-                    if (txt.toLowerCase().includes("завтра") && txt.length < 40) {
-                        els[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                        try { els[i].click(); } catch(e) {}
-                        return true;
+            clicked_text = driver.execute_script("""
+                var els = Array.from(document.querySelectorAll('*')).reverse();
+                
+                // Шукаємо елемент, у якого є слово "завтра", але СУВОРО немає слова "сьогодні"
+                var target = els.find(e => {
+                    var txt = (e.innerText || "").toLowerCase();
+                    return txt.includes("завтра") && !txt.includes("сьогодні");
+                });
+                
+                if (target) {
+                    // Симулюємо повноцінний клік мишкою
+                    target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                    try { target.click(); } catch(e) {}
+                    
+                    // Часто клік працює на батьківському блоці
+                    if (target.parentElement) {
+                        target.parentElement.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        try { target.parentElement.click(); } catch(e) {}
                     }
+                    return target.innerText.trim(); 
                 }
-                return false;
+                return null;
             """)
             
-            if clicked:
-                time.sleep(3.5) # Даємо час на підвантаження таблиці
+            if clicked_text:
+                time.sleep(3.5) # Даємо час сайту на підвантаження даних
                 nuke()
                 
-                # Знаходимо всі таблиці і беремо ту, яка зараз ВИДИМА на екрані
+                # Знаходимо всі таблиці і беремо ОСТАННЮ ВИДИМУ
                 tables = driver.find_elements(By.CLASS_NAME, "table2col")
-                target2 = None
-                for t in tables:
-                    if t.is_displayed():
-                        target2 = t
-                        break
+                visible_tables = [t for t in tables if t.is_displayed()]
                 
-                if target2:
+                if visible_tables:
+                    target2 = visible_tables[-1]
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target2)
                     time.sleep(0.5) 
                     
                     path2 = os.path.join(BASE_DIR, f"photo_{addr_key}_tomorrow.png")
                     target2.screenshot(path2)
                     
-                    try: 
-                        # Дістаємо гарну дату прямо з кнопки
-                        d2_txt = driver.execute_script("return Array.from(document.querySelectorAll('*')).find(e => (e.innerText||'').toLowerCase().includes('завтра') && e.innerText.length < 40).innerText.trim();")
-                        if not d2_txt: d2_txt = "Завтра"
-                    except: d2_txt = "Завтра"
+                    # Очищаємо текст (беремо тільки останній рядок, якщо їх декілька)
+                    d2_txt = clicked_text.split('\n')[-1].strip()
+                    if not d2_txt or len(d2_txt) > 30:
+                        d2_txt = "Завтра"
                     
                     parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
         except Exception as e:
