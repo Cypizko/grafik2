@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import os
+import json
 from datetime import datetime, timedelta, timezone
 from aiohttp import web
 
@@ -18,6 +19,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
+
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- ⚙️ НАСТРОЙКИ ---
 TOKEN = "8177741538:AAEqlEsJomzv8Sx7e-5jcM11gp05F5bHvtQ"
@@ -68,7 +72,7 @@ STORAGE = {
     for key in ADDRS
 }
 
-# Глобальные переменные для браузера
+# Глобальные переменные
 DRIVER = None
 BROWSER_LOCK = None
 
@@ -76,9 +80,40 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# --- 📊 ГУГЛ ТАБЛИЦЫ ---
+def log_to_sheets(user_name, username, action):
+    try:
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+        sheet_id = os.environ.get("SPREADSHEET_ID")
+        
+        if not creds_json or not sheet_id:
+            return # Если ключей нет, просто выходим
+
+        creds_dict = json.loads(creds_json)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(sheet_id).sheet1
+        
+        # Время записи (по Киеву)
+        now = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%d.%m.%Y %H:%M:%S")
+        uname = f"@{username}" if username else "Скрыт" 
+        
+        row = [now, user_name, uname, action]
+        sheet.append_row(row)
+    except Exception as e:
+        print(f"⚠️ Ошибка записи в таблицу: {e}")
+
+# Асинхронная обертка для записи
+async def async_log(user_name, username, action):
+    await asyncio.to_thread(log_to_sheets, user_name, username, action)
+
 # --- 🚀 УПРАВЛЕНИЕ БРАУЗЕРОМ ---
 def close_browser():
-    """Жестко закрывает браузер (Синхронная функция)"""
     global DRIVER
     if DRIVER is not None:
         print("💤 Закрываю браузер (освобождаю память)...")
@@ -87,13 +122,11 @@ def close_browser():
         DRIVER = None
 
 async def safe_close_browser():
-    """Безопасное закрытие браузера из асинхронного потока"""
     global BROWSER_LOCK
     async with BROWSER_LOCK:
         close_browser()
 
 def get_browser():
-    """Возвращает текущий браузер или открывает новый"""
     global DRIVER
     if DRIVER is not None:
         try:
@@ -114,8 +147,7 @@ def get_browser():
         chrome_options.add_argument("--window-size=1920,1080")
     
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    mobile_emulation = { "deviceName": "iPhone XR" }
-    chrome_options.add_experimental_option("mobileEmulation", mobile_emulation)
+    chrome_options.add_experimental_option("mobileEmulation", { "deviceName": "iPhone XR" })
     
     try:
         service = Service(ChromeDriverManager().install())
@@ -125,7 +157,7 @@ def get_browser():
         print(f"❌ Ошибка запуска Chrome: {e}")
         return None
 
-# --- 🕵️ СИНХРОННЫЙ ПАРСЕР (В ФОНОВОМ ПОТОКЕ) ---
+# --- 🕵️ СИНХРОННЫЙ ПАРСЕР ---
 def sync_parse_dtek(addr_key, addr):
     global DRIVER
     print(f"🕵️ MONITOR: Проверяю {addr['street']} {addr['house']}...")
@@ -170,7 +202,7 @@ def sync_parse_dtek(addr_key, addr):
                     if(list) {{ var items = list.getElementsByTagName('div'); if(items.length>0) items[0].click(); }}
                 """)
                 time.sleep(0.5)
-            except Exception as e: pass
+            except: pass
 
         safe_fill("city", addr['city'])
         safe_fill("street", addr['street'])
@@ -198,7 +230,8 @@ def sync_parse_dtek(addr_key, addr):
 
         def get_status():
             try:
-                h = (datetime.now().hour + 2) % 24
+                # Київський час для правильного статусу на сайті
+                h = (datetime.now(timezone.utc) + timedelta(hours=2)).hour
                 t_str = f"{h:02d}-{h+1:02d}"
                 script = f"""
                 var tds = document.querySelectorAll('td');
@@ -219,7 +252,6 @@ def sync_parse_dtek(addr_key, addr):
         status_now = get_status()
         base_caption = f"{status_now}\n🏠 {addr['header']}"
 
-        # ФОТО 1
         try:
             target = driver.find_element(By.CLASS_NAME, "table2col")
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
@@ -227,11 +259,9 @@ def sync_parse_dtek(addr_key, addr):
             target.screenshot(path1)
             try: d_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
             except: d_txt = "Сьогодні"
-            
             parsed_data["today"] = {"photo": path1, "caption": f"{base_caption}\n📅 {d_txt}"}
         except: pass
 
-        # ФОТО 2
         try:
             clicked = driver.execute_script("""
                 var ds = document.querySelectorAll('.date');
@@ -250,7 +280,6 @@ def sync_parse_dtek(addr_key, addr):
                     target2.screenshot(path2)
                     try: d2_txt = driver.find_element(By.CSS_SELECTOR, ".date.active span[rel='date']").text
                     except: d2_txt = "Завтра"
-                    
                     parsed_data["tomorrow"] = {"photo": path2, "caption": f"ℹ️ Графік на завтра\n🏠 {addr['header']}\n📅 {d2_txt}"}
         except: pass
 
@@ -280,7 +309,6 @@ async def send_schedule(user_id, addr_key, is_instant=False):
 
     caption = today["caption"]
     if is_instant:
-        # Беремо час сервера (UTC) і додаємо 2 години для Києва
         dt_utc = datetime.fromtimestamp(data["last_check"], tz=timezone.utc)
         dt_kyiv = dt_utc + timedelta(hours=2)
         update_time = dt_kyiv.strftime("%H:%M")
@@ -303,7 +331,7 @@ def switch_subscription(user_id, new_addr_key):
             STORAGE[key]["subscribers"].remove(user_id)
     STORAGE[new_addr_key]["subscribers"].add(user_id)
 
-# --- ЛОГИКА ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕМ ---
+# --- ЛОГИКА ПРОВЕРКИ ---
 async def perform_check(user_id, addr_key):
     switch_subscription(user_id, addr_key)
     
@@ -387,41 +415,50 @@ def get_dnipro_kb():
 # --- 🤖 БОТ ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "🚀 Натиснув /start"))
     await message.answer("⚡ Фрафік на зв'язку! Обери населений пункт:", reply_markup=get_main_kb())
 
 @dp.message(F.text == "🔙 Назад")
 async def process_back(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "🔙 Повернувся назад"))
     await message.answer("Обери населений пункт:", reply_markup=get_main_kb())
 
 @dp.message(F.text == "🏠 Новомиколаївка")
 async def process_novo(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "🏠 Новомиколаївка"))
     await perform_check(message.from_user.id, "addr1")
 
 @dp.message(F.text == "🏢 Дніпро")
 async def process_dnipro_menu(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "🏢 Відкрив меню Дніпра"))
     await message.answer("📍 Оберіть вулицю в м. Дніпро:", reply_markup=get_dnipro_kb())
 
 @dp.message(F.text == "📍 Севастопольська, 16")
 async def process_dnipro_1(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "📍 Севастопольська"))
     await perform_check(message.from_user.id, "dnipro_1")
 
 @dp.message(F.text == "📍 просп. Мануйлівський, 78")
 async def process_dnipro_2(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "📍 Мануйлівський"))
     await perform_check(message.from_user.id, "dnipro_2")
 
 @dp.message(F.text == "📍 вул. Мазепи Галини, 76")
 async def process_dnipro_3(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "📍 Мазепи Галини"))
     await perform_check(message.from_user.id, "dnipro_3")
 
 @dp.message(F.text == "📍 вул. Володимира Вернадського, 19/21")
 async def process_dnipro_4(message: types.Message):
+    asyncio.create_task(async_log(message.from_user.full_name, message.from_user.username, "📍 Вернадського"))
     await perform_check(message.from_user.id, "dnipro_4")
 
 @dp.callback_query(F.data.startswith("tmr_"))
 async def process_tomorrow(callback: types.CallbackQuery):
     addr_key = callback.data.split("_", 1)[1]
-    data = STORAGE.get(addr_key)
+    asyncio.create_task(async_log(callback.from_user.full_name, callback.from_user.username, f"📅 Дивився на завтра ({addr_key})"))
     
+    data = STORAGE.get(addr_key)
     if data and data["parsed"] and data["parsed"]["tomorrow"]:
         tmr = data["parsed"]["tomorrow"]
         if os.path.exists(tmr["photo"]):
@@ -457,4 +494,3 @@ async def main():
 if __name__ == '__main__':
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Бот остановлен")
-
